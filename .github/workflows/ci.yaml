@@ -1,0 +1,195 @@
+name: Build and publish to devpi
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEVPI_SERVER: https://stablekite.com:4438/
+  DEVPI_TARGET_INDEX: https://stablekite.com:4438/StableKite/index/
+
+jobs:
+  build:
+    name: Windows x86_64 / Python 3.14t
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14t
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14t"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade build wheel
+
+      - name: Build
+        run: python -m build
+
+      # pysetupdi is pure Python, but it directly uses Windows SetupAPI through
+      # ctypes.WinDLL. A generic *-none-any.whl would therefore be misleading:
+      # pip could install it on Linux/macOS even though importing it there
+      # cannot work. Retag the pure wheel as Windows x86_64.
+      - name: Retag wheel for Windows x86_64
+        shell: pwsh
+        run: |
+          $wheels = @(Get-ChildItem -Path "dist" -Filter "*.whl")
+          if ($wheels.Count -ne 1) {
+            throw "Expected exactly one wheel, found $($wheels.Count)"
+          }
+
+          python -m wheel tags `
+            --remove `
+            --platform-tag win_amd64 `
+            "$($wheels[0].FullName)"
+
+          $retagged = @(Get-ChildItem -Path "dist" -Filter "*.whl")
+          if ($retagged.Count -ne 1) {
+            throw "Expected exactly one retagged wheel, found $($retagged.Count)"
+          }
+
+          if ($retagged[0].Name -notmatch '-py3-none-win_amd64\.whl$') {
+            throw "Unexpected wheel tag: $($retagged[0].Name)"
+          }
+
+          Write-Host "Wheel: $($retagged[0].Name)"
+
+      - name: Test wheel on Python 3.14t
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem -Path "dist" -Filter "*.whl").FullName
+
+          python -m pip install `
+            --force-reinstall `
+            --no-deps `
+            "$wheel"
+
+          python -c "import sysconfig, pysetupdi; assert sysconfig.get_config_var('Py_GIL_DISABLED') == 1; print('Imported pysetupdi from', pysetupdi.__file__)"
+          pysetupdi --help | Out-Null
+
+      - name: Verify distributions
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          dist = Path("dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected exactly one wheel, got: {wheels}")
+          if len(sdists) != 1:
+              raise SystemExit(f"Expected exactly one sdist, got: {sdists}")
+
+          if not wheels[0].name.endswith("-py3-none-win_amd64.whl"):
+              raise SystemExit(f"Unexpected wheel filename: {wheels[0].name}")
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              bad = archive.testzip()
+              if bad is not None:
+                  raise SystemExit(f"Corrupt wheel member: {bad}")
+
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              archive.getmembers()
+
+          print("Artifacts:")
+          print(f"  {wheels[0].name}")
+          print(f"  {sdists[0].name}")
+          '@ | python -
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+
+  publish:
+    name: Publish to devpi
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install devpi tools
+        run: python -m pip install devpi-client devpi-tokens "pypitoken>=6.0.1"
+
+      - name: Verify downloaded artifacts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          dist = Path("dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected exactly one wheel, got: {wheels}")
+          if len(sdists) != 1:
+              raise SystemExit(f"Expected exactly one sdist, got: {sdists}")
+
+          if not wheels[0].name.endswith("-py3-none-win_amd64.whl"):
+              raise SystemExit(f"Unexpected wheel filename: {wheels[0].name}")
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              bad = archive.testzip()
+              if bad is not None:
+                  raise SystemExit(f"Corrupt wheel member: {bad}")
+
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              archive.getmembers()
+
+          print("Ready to publish:")
+          for artifact in sorted(dist.iterdir()):
+              print(f"  {artifact.name} ({artifact.stat().st_size} bytes)")
+          PY
+
+      - name: Publish
+        env:
+          DEVPI_TOKEN: ${{ secrets.DEVPI_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEVPI_TOKEN:-}" ]; then
+            echo "::error::DEVPI_TOKEN is not available to this repository."
+            exit 1
+          fi
+
+          TOKEN_FILE="$RUNNER_TEMP/devpi-token"
+          printf '%s' "$DEVPI_TOKEN" > "$TOKEN_FILE"
+          chmod 600 "$TOKEN_FILE"
+          trap 'rm -f "$TOKEN_FILE"' EXIT
+
+          devpi use "$DEVPI_SERVER"
+          devpi token-login -f "$TOKEN_FILE"
+          devpi use "$DEVPI_TARGET_INDEX"
+          devpi upload dist/*
