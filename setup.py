@@ -4,7 +4,7 @@ import sys
 
 setup(
     name='pysetupdi',
-    version='2018.10.22',
+    version='2018.10.23',
     packages=['pysetupdi'],
     url='https://github.com/gwangyi/pysetupdi',
     license='MIT',
