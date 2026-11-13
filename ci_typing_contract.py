@@ -33,7 +33,9 @@ def run(label, command):
     return result
 
 
-my = run('mypy-public', [sys.executable, '-I', '-m', 'mypy', '--strict', '--platform', 'win32', '--python-version', version, '--no-incremental', '--cache-dir', OUT / 'my-cache', package, inputs / 'positive.py'])
+my = run('mypy-public', [sys.executable, '-I', '-m', 'mypy', '--strict', '--platform', 'win32', '--python-version', version, '--no-incremental', '--cache-dir', OUT / 'my-cache', '-p', 'pysetupdi'])
+assert my.returncode == 0, my.stdout.decode(errors='replace')
+my = run('mypy-positive', [sys.executable, '-I', '-m', 'mypy', '--strict', '--platform', 'win32', '--python-version', version, '--no-incremental', '--cache-dir', OUT / 'my-cache-positive', inputs / 'positive.py'])
 assert my.returncode == 0, my.stdout.decode(errors='replace')
 config = inputs / 'pyright-public.json'
 config.write_text(json.dumps({'include': [os.path.relpath(p, inputs) for p in public] + ['positive.py'], 'typeCheckingMode': 'strict', 'pythonVersion': version, 'pythonPlatform': 'Windows'}, indent=2) + '\n')
