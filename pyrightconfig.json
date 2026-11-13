@@ -1,0 +1,7 @@
+{
+  "include": ["pysetupdi/__init__.py", "pysetupdi/__main__.py", "pysetupdi/constants.py", "pysetupdi/structures.pyi", "pysetupdi/setupdi.pyi", "pysetupdi/property.pyi", "tests/typing/positive.py"],
+  "extraPaths": ["."],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Windows"
+}

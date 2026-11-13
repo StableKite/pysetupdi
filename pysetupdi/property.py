@@ -16,6 +16,22 @@ import datetime
 _oleaut32 = ctypes.WinDLL('oleaut32')
 _kernel32 = ctypes.WinDLL('kernel32')
 
+# Declare pointer-sized results before using them on 64-bit Windows.
+_oleaut32.VariantTimeToSystemTime.argtypes = [ctypes.c_double, ctypes.c_void_p]
+_oleaut32.VariantTimeToSystemTime.restype = ctypes.c_int
+_kernel32.FileTimeToSystemTime.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_kernel32.FileTimeToSystemTime.restype = ctypes.c_int
+_kernel32.LoadLibraryW.argtypes = [ctypes.c_wchar_p]
+_kernel32.LoadLibraryW.restype = ctypes.c_void_p
+_kernel32.FreeLibrary.argtypes = [ctypes.c_void_p]
+_kernel32.FreeLibrary.restype = ctypes.c_int
+_kernel32.FormatMessageW.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                                    ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                                    ctypes.c_void_p]
+_kernel32.FormatMessageW.restype = ctypes.c_uint32
+_kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+_kernel32.LocalFree.restype = ctypes.c_void_p
+
 
 class Property(object):
     """Property parser class"""
@@ -53,7 +69,7 @@ class Property(object):
             cls._property_type[prop_type] = f
             if length is not None:
                 def array_parser(buffer):
-                    return list(f(buffer[i:i+length] for i in range(0, len(buffer), length)))
+                    return [f(buffer[i:i+length]) for i in range(0, len(buffer), length)]
 
                 cls._property_type[prop_type | DEVPROP_TYPEMOD_ARRAY] = array_parser
 
@@ -90,8 +106,8 @@ def _add_parsers():
     def sbyte_parser(buffer):
         """DEVPROP_TYPE_SBYTE parser
 
-        Every element of default python byte array is signed byte, so just return first element"""
-        return buffer[0]
+        Python bytes elements are unsigned; DEVPROP_TYPE_SBYTE is signed."""
+        return int.from_bytes(buffer[:1], 'little', signed=True)
 
     # noinspection SpellCheckingInspection
     @Property.add_parser(DEVPROP_TYPE_SBYTE | DEVPROP_TYPEMOD_ARRAY)
@@ -150,7 +166,7 @@ def _add_parsers():
     @Property.add_parser(DEVPROP_TYPE_DECIMAL, length=16)
     def decimal_parser(buffer):
         # noinspection SpellCheckingInspection
-        scale, sign, hi, lo = struct.unpack("xxBBHQ", buffer[:16])
+        _, scale, sign, hi, lo = struct.unpack("<HBBIQ", buffer[:16])
         val = (hi << 64) | lo
         val *= 1 if sign & 0x80 == 0 else -1
         return val / (10 ** scale)
@@ -161,20 +177,22 @@ def _add_parsers():
 
     @Property.add_parser(DEVPROP_TYPE_CURRENCY, length=8)
     def currency_parser(buffer):
-        return struct.unpack('Q', buffer[:8])[0] / 10000
+        return struct.unpack('<q', buffer[:8])[0] / 10000
 
     @Property.add_parser(DEVPROP_TYPE_DATE, length=8)
     def date_parser(buffer):
         t = struct.unpack('d', buffer[:8])[0]
         buf = ctypes.create_string_buffer(16)
-        _oleaut32.VariantTimeToSystemTime(t, ctypes.byref(buf))
+        if not _oleaut32.VariantTimeToSystemTime(t, ctypes.byref(buf)):
+            raise ValueError("Invalid OLE Automation date")
         y, m, _, d, hh, mm, ss, ms = struct.unpack("8H", bytes(buf))
         return datetime.datetime(y, m, d, hh, mm, ss, ms * 1000)
 
     @Property.add_parser(DEVPROP_TYPE_FILETIME, length=8)
     def filetime_parser(buffer):
         buf = ctypes.create_string_buffer(16)
-        _kernel32.FileTimeToSystemTime(buffer[:8], ctypes.byref(buf))
+        if not _kernel32.FileTimeToSystemTime(buffer[:8], ctypes.byref(buf)):
+            raise ctypes.WinError()
         y, m, _, d, hh, mm, ss, ms = struct.unpack("8H", bytes(buf))
         return datetime.datetime(y, m, d, hh, mm, ss, ms * 1000)
 
@@ -200,7 +218,7 @@ def _add_parsers():
 
     @Property.add_parser(DEVPROP_TYPE_ERROR)
     def error_parser(buffer):
-        err_no = struct.unpack("l", buffer[:4])
+        err_no = struct.unpack("<i", buffer[:4])[0]
         return err_no, ctypes.FormatError(err_no)
 
     @Property.add_parser(DEVPROP_TYPE_ERROR | DEVPROP_TYPEMOD_ARRAY)
@@ -213,12 +231,16 @@ def _add_parsers():
             ntstatus -= 0x100000000
         msg_ptr = ctypes.c_wchar_p()
         ntdll = _kernel32.LoadLibraryW('NTDLL.DLL')
+        if not ntdll:
+            raise ctypes.WinError()
         try:
-            _kernel32.FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+            count = _kernel32.FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                                      FORMAT_MESSAGE_FROM_SYSTEM |
                                      FORMAT_MESSAGE_FROM_HMODULE,
                                      ntdll, ntstatus, 0x0400,  # LANG_NEUTRAL, SUBLANG_DEFAULT
                                      ctypes.byref(msg_ptr), 0, None)
+            if not count or msg_ptr.value is None:
+                raise ctypes.WinError()
             return msg_ptr.value.replace("\r\n", "\n").strip("\n")
         finally:
             if msg_ptr.value is not None:

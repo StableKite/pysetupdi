@@ -2,6 +2,8 @@ from pysetupdi import devices, Device
 from pysetupdi.constants import DevicePropertyKeys, DiGetClassDevsFlags
 from pysetupdi.structures import DevicePropertyKey
 from optparse import OptionParser
+from collections.abc import Iterator
+from typing import Protocol, runtime_checkable
 import re
 
 
@@ -9,13 +11,34 @@ class ArgumentLengthNotMatchedError(RuntimeError):
     pass
 
 
-def convert(name):
+def convert(name: str) -> str:
     s1 = re.sub('(?<=[0-9A-Z])([A-Z][a-z]+)', r'_\1', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
 # noinspection SpellCheckingInspection
-def main():
+@runtime_checkable
+class _ObjectIterable(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+def _predefined_name(key: DevicePropertyKey) -> str:
+    name = key.name
+    if name is None:
+        raise ValueError("A predefined device property key must have a name")
+    return convert(name.split('_', 2)[-1])
+
+
+def _device_ids(value: object) -> Iterator[str]:
+    if not isinstance(value, _ObjectIterable):
+        raise TypeError("Device relations must be iterable")
+    for instance_id in value:
+        if not isinstance(instance_id, str):
+            raise TypeError("A device instance identifier must be a string")
+        yield instance_id
+
+
+def main() -> None:
     parser = OptionParser(usage="Usage: {}".format("\n       ".join(
         ["%prog [options] list",
          "%prog [options] keys",
@@ -85,7 +108,7 @@ def main():
                     if isinstance(predefined, DevicePropertyKey):
                         if key == predefined:
                             is_predefined = True
-                            print("{}".format(convert(predefined.name.split('_', 2)[-1])))
+                            print("{}".format(_predefined_name(predefined)))
                 if not is_predefined:
                     print("{}".format(str(key)))
         elif args[0] == 'print':
@@ -102,7 +125,7 @@ def main():
                         if isinstance(predefined, DevicePropertyKey):
                             if key == predefined:
                                 is_predefined = True
-                                key_name = convert(predefined.name.split('_', 2)[-1])
+                                key_name = _predefined_name(predefined)
                     if not is_predefined:
                         key_name = str(key)
 
@@ -110,19 +133,19 @@ def main():
                         print("  {}: {}".format(key_name, repr(dev.parent)))
                     elif key in (DevicePropertyKeys.Device.Children, DevicePropertyKeys.Device.Siblings):
                         print("  {}:".format(key_name))
-                        for subdev in dev.get_property(key):
+                        for subdev in _device_ids(dev.get_property(key)):
                             print("    - {}".format(repr(Device(subdev))))
                     else:
                         prop = dev.get_property(key)
-                        if hasattr(prop, '__iter__') and not isinstance(prop, (str, bytes)):
+                        if isinstance(prop, _ObjectIterable) and not isinstance(prop, (str, bytes)):
                             print("  {}:".format(key_name))
                             for item in prop:
                                 if isinstance(item, (str, bytes)):
-                                    print("    - {}".format(item))
+                                    print("    - {}".format(str(item)))
                                 else:
                                     print("    - {}".format(repr(item)))
                         elif isinstance(prop, (str, bytes)):
-                            print("  {}: {}".format(key_name, prop))
+                            print("  {}: {}".format(key_name, str(prop)))
                         else:
                             print("  {}: {}".format(key_name, repr(prop)))
                 if options.just_one:
@@ -133,14 +156,14 @@ def main():
                 for predefined_name in dir(DevicePropertyKeys.Device):
                     predefined = getattr(DevicePropertyKeys.Device, predefined_name, None)
                     if isinstance(predefined, DevicePropertyKey):
-                        key_name = convert(predefined.name.split('_', 2)[-1])
+                        key_name = _predefined_name(predefined)
                         if args[1] == key_name:
                             key = predefined
                             break
                 if key is None:
                     raise AttributeError("Given key {} is unknown".format(args[1]))
             elif len(args) == 3:
-                key = DevicePropertyKey(args[1], args[2])
+                key = DevicePropertyKey(args[1], int(args[2], 0))
             else:
                 raise ArgumentLengthNotMatchedError
 

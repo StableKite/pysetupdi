@@ -4,8 +4,10 @@ import sys
 
 setup(
     name='pysetupdi',
-    version='2018.10.23',
+    version='2018.10.23+stablekite.1',
     packages=['pysetupdi'],
+    package_data={'pysetupdi': ['py.typed', '*.pyi']},
+    python_requires='>=3.10',
     url='https://github.com/gwangyi/pysetupdi',
     license='MIT',
     author='Sungkwang Lee',

@@ -19,7 +19,10 @@ class _GUID(ctypes.Structure):
                 err_no = ctypes.GetLastError()
                 raise WindowsError(err_no, ctypes.FormatError(err_no), guid)
         else:
-            ctypes.memmove(ctypes.byref(self), bytes(guid), ctypes.sizeof(self))
+            data = bytes(guid)
+            if len(data) < ctypes.sizeof(self):
+                raise ValueError("A GUID buffer must contain at least 16 bytes")
+            ctypes.memmove(ctypes.byref(self), data, ctypes.sizeof(self))
 
     def __str__(self):
         s = ctypes.c_wchar_p()

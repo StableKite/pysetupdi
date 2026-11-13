@@ -10,4 +10,4 @@ giving DevicePropertyKey object as an index to device object.
 ...     print(hard_disk_drive.device_desc)
 """
 
-from .setupdi import devices, Device
+from .setupdi import devices as devices, Device as Device
