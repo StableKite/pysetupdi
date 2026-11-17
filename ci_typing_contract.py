@@ -13,7 +13,7 @@ OUT.mkdir(exist_ok=False)
 distribution = importlib.metadata.distribution('pysetupdi')
 package = Path(distribution.locate_file('pysetupdi')).resolve()
 assert package.is_relative_to(Path(sys.prefix).resolve()), package
-assert distribution.version == '2018.10.23+stablekite.1'
+assert distribution.version == '2018.10.23+stablekite.2'
 assert (package / 'py.typed').is_file()
 inputs = OUT / 'inputs'
 shutil.copytree(ROOT / 'tests/typing', inputs)
@@ -54,8 +54,26 @@ parsed = json.loads(pr.stdout)
 errors = [row for row in parsed['generalDiagnostics'] if row['severity'] == 'error']
 actual = sorted(set(row['range']['start']['line'] + 1 for row in errors))
 assert pr.returncode == 1 and actual == expected and all(row.get('rule') != 'reportUnusedVariable' for row in errors), parsed
+cached_negative = inputs / 'cached_negative.py'
+cached_expected = [n for n, line in enumerate(cached_negative.read_text().splitlines(), 1) if '# E' in line]
+assert len(cached_expected) == 2
+my = run('mypy-cached-negative', [sys.executable, '-I', '-m', 'mypy', '--strict', '--platform', 'win32', '--python-version', version, '--no-incremental', '--cache-dir', OUT / 'cached-negative-my-cache', cached_negative])
+actual = sorted(set(int(n) for n in re.findall(r'cached_negative\.py:(\d+): error:', my.stdout.decode())))
+assert my.returncode == 1 and actual == cached_expected, (actual, cached_expected)
+config = inputs / 'pyright-cached-negative.json'
+config.write_text(json.dumps({'include': ['cached_negative.py'], 'typeCheckingMode': 'strict', 'pythonVersion': version, 'pythonPlatform': 'Windows'}, indent=2) + '\n')
+pr = run('pyright-cached-negative', [sys.executable, '-I', '-m', 'pyright', '--project', config, '--pythonpath', sys.executable, '--outputjson'])
+parsed = json.loads(pr.stdout)
+actual = sorted(set(row['range']['start']['line'] + 1 for row in parsed['generalDiagnostics'] if row['severity'] == 'error'))
+assert pr.returncode == 1 and actual == cached_expected, parsed
+config = inputs / 'pyright-private-probe.json'
+config.write_text(json.dumps({'include': ['private_probe.py'], 'typeCheckingMode': 'strict', 'pythonVersion': '3.15', 'pythonPlatform': 'Windows'}, indent=2) + '\n')
+pr = run('pyright-real-strict-private-probe', [sys.executable, '-I', '-m', 'pyright', '--project', config, '--pythonpath', sys.executable, '--outputjson'])
+private_errors = [row for row in json.loads(pr.stdout)['generalDiagnostics'] if row['severity'] == 'error']
+assert pr.returncode == 0 and not private_errors, private_errors
 if sys.platform == 'win32':
     assert run('real-native-positive', [sys.executable, '-I', inputs / 'positive.py']).returncode == 0
 result = {'status': 'PASS_ACTUAL_INSTALLED_PUBLIC_INTERFACE', 'version': distribution.version, 'installed_package': str(package), 'python': sys.version, 'public_module_files': [p.name for p in public], 'negative_exact_lines_each_checker': expected, 'platform_scope': 'Native Windows; Windows-target static analysis on Linux. The ctypes implementation files covered by .pyi are tested natively, not claimed to pass raw implementation strict analysis.'}
+result.update(stored_id_negative_exact_lines_each_checker=cached_expected, declared_private_field_read_accepted_by_real_strict_Pyright=True, stored_identifier_positive='PASS', runtime_modified=False)
 (OUT / 'RESULT.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))

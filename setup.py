@@ -4,7 +4,7 @@ import sys
 
 setup(
     name='pysetupdi',
-    version='2018.10.23+stablekite.1',
+    version='2018.10.23+stablekite.2',
     packages=['pysetupdi'],
     package_data={'pysetupdi': ['py.typed', '*.pyi']},
     python_requires='>=3.10',

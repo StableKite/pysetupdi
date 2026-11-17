@@ -8,6 +8,7 @@ from .property import Property as Property
 class DeviceType(type): ...
 
 class Device(metaclass=DeviceType):
+    _instance_id: str
     @property
     def device_desc(self) -> str: ...
     @property

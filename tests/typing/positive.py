@@ -45,6 +45,11 @@ def device_contract(device: Device) -> None:
         assert_type(opened[DevicePropertyKeys.Device.InstanceId], object)
 
 
+def stored_identifier_contract(device: Device) -> str:
+    assert_type(device._instance_id, str)
+    return device._instance_id
+
+
 def constructor_contract() -> None:
     guid = GUID('{00112233-4455-6677-8899-AABBCCDDEEFF}')
     assert_type(bytes(guid), bytes)

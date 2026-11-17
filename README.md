@@ -38,3 +38,8 @@ queries. Linux validation covers packaging and Windows-target static analysis;
 native import and device access require Windows. Static package checks resolve
 the supplied `.pyi` interfaces; they do not claim strict analysis of the raw
 `ctypes` implementation files that those interfaces describe.
+
+The stored `Device._instance_id` field is described as `str`, matching the
+constructor and the IDs obtained by `devices()`. Reading this existing field
+does not open a handle or query Windows. The `instance_id` property continues
+to query Windows and retains its established behavior. No runtime API is added.
